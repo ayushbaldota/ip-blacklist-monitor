@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     # External URLs
     external_api_url: str = "http://localhost:8000"
 
+    # CORS
+    cors_origins: str = ""
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parse CORS origins from comma-separated string."""
+        if not self.cors_origins:
+            return []
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
     @property
     def dnsbl_zones_list(self) -> List[str]:
         """Parse DNSBL zones from comma-separated string."""
