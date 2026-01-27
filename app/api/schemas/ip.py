@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.utils.validators import validate_ip_address
 
@@ -15,6 +15,9 @@ class IPCreate(BaseModel):
     description: Optional[str] = Field(
         None, max_length=255, description="Optional description", examples=["Mail server"]
     )
+    tags: List[str] = Field(
+        default_factory=list, max_length=20, description="Tags for organization", examples=[["production", "web"]]
+    )
 
     @field_validator("ip_address")
     @classmethod
@@ -24,6 +27,32 @@ class IPCreate(BaseModel):
             raise ValueError(error)
         return v.strip()
 
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: List[str]) -> List[str]:
+        """Normalize tags to lowercase and remove duplicates."""
+        return list(set(tag.lower().strip() for tag in v if tag.strip()))
+
+
+class IPUpdate(BaseModel):
+    """Schema for updating an IP."""
+
+    description: Optional[str] = Field(
+        None, max_length=255, description="Optional description"
+    )
+    tags: Optional[List[str]] = Field(
+        None, max_length=20, description="Tags for organization"
+    )
+    is_active: Optional[bool] = Field(None, description="Whether IP is active")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Normalize tags to lowercase and remove duplicates."""
+        if v is None:
+            return None
+        return list(set(tag.lower().strip() for tag in v if tag.strip()))
+
 
 class IPBulkCreate(BaseModel):
     """Schema for bulk creating IPs."""
@@ -31,6 +60,15 @@ class IPBulkCreate(BaseModel):
     ips: List[IPCreate] = Field(
         ..., min_length=1, max_length=100, description="List of IPs to add (max 100)"
     )
+    tags: List[str] = Field(
+        default_factory=list, description="Tags to apply to all IPs"
+    )
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: List[str]) -> List[str]:
+        """Normalize tags to lowercase and remove duplicates."""
+        return list(set(tag.lower().strip() for tag in v if tag.strip()))
 
 
 class IPBulkResult(BaseModel):
@@ -69,12 +107,23 @@ class IPResponse(BaseModel):
     ip_address: str
     ip_version: int
     description: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
     status: str
     last_checked: Optional[datetime] = None
     blacklist_sources: List[Any] = Field(default_factory=list)
+    blacklist_count: int = 0
+    listings: int = 0
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def compute_blacklist_count(self):
+        """Compute blacklist_count and listings from blacklist_sources."""
+        if self.blacklist_sources:
+            self.blacklist_count = len(self.blacklist_sources)
+            self.listings = len(self.blacklist_sources)
+        return self
 
 
 class IPListResponse(BaseModel):

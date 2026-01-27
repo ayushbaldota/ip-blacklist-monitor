@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,11 +13,13 @@ from app.api.schemas.common import (
     StatsResponse,
 )
 from app.config import get_settings
+from app.core.rate_limiter import limiter
 from app.core.security import require_read_permission
 from app.db.database import get_db
 from app.db.models import APIKey
 from app.db.repositories.history_repository import HistoryRepository
 from app.db.repositories.ip_repository import IPRepository
+from app.services.slack_notifier import SlackNotifier
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -88,7 +90,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/stats", response_model=StatsResponse)
+@router.get("/stats")
 async def get_stats(
     db: AsyncSession = Depends(get_db),
     api_key: APIKey = Depends(require_read_permission),
@@ -113,18 +115,63 @@ async def get_stats(
             "next_run": status["next_run"],
         }
 
-    return StatsResponse(
-        data={
-            "ips": ip_stats,
-            "checks": {
-                "last_run": scheduler_info.get("last_run"),
-                "next_run": scheduler_info.get("next_run"),
-                "checks_today": checks_today,
-                "status_changes_today": changes_today,
-            },
-            "providers": {
-                "total": len(settings.dnsbl_zones_list),
-                "zones": settings.dnsbl_zones_list,
-            },
+    # Return flat structure for frontend compatibility
+    return {
+        "data": {
+            "total": ip_stats.get("total", 0),
+            "active": ip_stats.get("active", 0),
+            "clean": ip_stats.get("by_status", {}).get("clean", 0),
+            "blacklisted": ip_stats.get("by_status", {}).get("blacklisted", 0),
+            "pending": ip_stats.get("by_status", {}).get("pending", 0),
+            "last_check_run": scheduler_info.get("last_run"),
+            "next_check_run": scheduler_info.get("next_run"),
+            "check_interval": f"{settings.check_interval_hours} hours",
+            "active_providers": len(settings.dnsbl_zones_list),
+            "checks_today": checks_today,
+            "status_changes_today": changes_today,
+            "providers": settings.dnsbl_zones_list,
         }
+    }
+
+
+@router.get("/activity")
+async def get_activity(
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+    api_key: APIKey = Depends(require_read_permission),
+):
+    """Get recent activity (status changes)."""
+    history_repo = HistoryRepository(db)
+
+    # Get recent history entries with status changes
+    recent = await history_repo.get_recent_activity(limit=limit)
+
+    return {
+        "data": {
+            "items": recent
+        }
+    }
+
+
+@router.post("/webhook/test")
+@limiter.limit("5/minute")
+async def test_webhook(
+    request: Request,
+    api_key: APIKey = Depends(require_read_permission),
+):
+    """
+    Send a test notification to verify webhook configuration.
+
+    This endpoint sends a test message to the configured Slack webhook
+    to verify that notifications are working correctly.
+    """
+    notifier = SlackNotifier(
+        webhook_url=settings.slack_webhook_url,
+        enabled=settings.slack_enabled,
     )
+
+    try:
+        result = await notifier.send_test_notification()
+        return {"data": result}
+    finally:
+        await notifier.close()

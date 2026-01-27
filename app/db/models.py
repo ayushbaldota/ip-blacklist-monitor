@@ -30,6 +30,7 @@ class IP(Base):
     ip_address: Mapped[str] = mapped_column(String(45), unique=True, nullable=False, index=True)
     ip_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tags: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", index=True
     )

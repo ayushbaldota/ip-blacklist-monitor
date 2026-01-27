@@ -182,3 +182,28 @@ class HistoryRepository:
             .where(IPHistory.status == "blacklisted")
         )
         return result.scalar() or 0
+
+    async def get_recent_activity(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent activity for the dashboard."""
+        query = (
+            select(IPHistory, IP.ip_address)
+            .join(IP, IPHistory.ip_id == IP.id)
+            .order_by(IPHistory.checked_at.desc())
+            .limit(limit)
+        )
+
+        result = await self.db.execute(query)
+        rows = result.all()
+
+        activities = []
+        for history, ip_address in rows:
+            activities.append({
+                "id": history.id,
+                "ip_address": ip_address,
+                "ip_id": history.ip_id,
+                "status": history.status,
+                "blacklist_count": len(history.blacklist_sources) if history.blacklist_sources else 0,
+                "checked_at": history.checked_at.isoformat() if history.checked_at else None,
+            })
+
+        return activities

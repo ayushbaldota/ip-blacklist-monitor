@@ -262,6 +262,57 @@ class SlackNotifier:
         """Check if Slack is configured and accessible."""
         return bool(self.webhook_url)
 
+    async def send_test_notification(self) -> Dict[str, Any]:
+        """Send a test notification to verify webhook configuration."""
+        if not self.webhook_url:
+            return {
+                "success": False,
+                "error": "Slack webhook URL not configured",
+            }
+
+        payload = {
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Test Notification",
+                        "emoji": True,
+                    },
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "This is a test notification from the IP Blacklist Monitor. If you see this message, your webhook is configured correctly!",
+                    },
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": f"Sent at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+                        }
+                    ],
+                },
+            ]
+        }
+
+        success = await self._send_message(payload)
+
+        if success:
+            return {
+                "success": True,
+                "message": "Test notification sent successfully",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Failed to send test notification",
+            }
+
     async def close(self) -> None:
         """Close HTTP client."""
         if self._client:

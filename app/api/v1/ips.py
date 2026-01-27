@@ -20,6 +20,7 @@ from app.api.schemas.ip import (
     IPHistorySummary,
     IPListResponse,
     IPResponse,
+    IPUpdate,
 )
 from app.core.exceptions import IPAlreadyExistsError, IPNotFoundError, ValidationError
 from app.core.rate_limiter import limiter
@@ -56,6 +57,7 @@ async def create_ip(
         ip = await repo.create(
             ip_address=ip_data.ip_address,
             description=ip_data.description,
+            tags=ip_data.tags,
         )
         await db.commit()
 
@@ -91,11 +93,17 @@ async def create_ips_bulk(
     added = 0
     skipped = 0
 
+    # Merge bulk tags with individual item tags
+    bulk_tags = bulk_data.tags
+
     for ip_item in bulk_data.ips:
+        # Combine bulk tags with individual tags
+        combined_tags = list(set(bulk_tags + ip_item.tags))
         try:
             ip = await repo.create(
                 ip_address=ip_item.ip_address,
                 description=ip_item.description,
+                tags=combined_tags,
             )
             results.append(
                 IPBulkResult(ip_address=ip_item.ip_address, status="added", id=ip.id)
@@ -145,6 +153,7 @@ async def list_ips(
     sort_by: str = Query("created_at", description="Sort field"),
     sort_order: str = Query("desc", description="Sort order"),
     search: Optional[str] = Query(None, description="Search in IP or description"),
+    tag: Optional[str] = Query(None, description="Filter by tag"),
     db: AsyncSession = Depends(get_db),
     api_key: APIKey = Depends(require_read_permission),
 ):
@@ -159,23 +168,26 @@ async def list_ips(
         sort_by=sort_by,
         sort_order=sort_order,
         search=search,
+        tag=tag,
     )
 
     total_pages = (total + per_page - 1) // per_page
 
-    return DataResponse(
-        data=IPListResponse(
-            items=[IPResponse.model_validate(ip) for ip in ips],
-            pagination={
-                "page": page,
-                "per_page": per_page,
-                "total_items": total,
-                "total_pages": total_pages,
-                "has_next": page < total_pages,
-                "has_prev": page > 1,
-            },
-        ).model_dump()
-    )
+    # Build response with total at root level for frontend compatibility
+    response_data = {
+        "items": [IPResponse.model_validate(ip).model_dump() for ip in ips],
+        "total": total,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total_items": total,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
+        },
+    }
+
+    return DataResponse(data=response_data)
 
 
 @router.get(
@@ -225,6 +237,38 @@ async def get_ip(
         raise IPNotFoundError(ip_id)
 
     return DataResponse(data=IPResponse.model_validate(ip).model_dump())
+
+
+@router.patch(
+    "/{ip_id}",
+    response_model=DataResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+@limiter.limit("30/minute")
+async def update_ip(
+    request: Request,
+    ip_id: int,
+    ip_data: IPUpdate,
+    db: AsyncSession = Depends(get_db),
+    api_key: APIKey = Depends(require_write_permission),
+):
+    """Update an IP address metadata."""
+    repo = IPRepository(db)
+
+    ip = await repo.update(
+        ip_id=ip_id,
+        description=ip_data.description,
+        tags=ip_data.tags,
+        is_active=ip_data.is_active,
+    )
+    await db.commit()
+
+    logger.info("IP updated via API", ip_id=ip_id, ip_address=ip.ip_address)
+
+    return DataResponse(
+        data=IPResponse.model_validate(ip).model_dump(),
+        message="IP address updated successfully",
+    )
 
 
 @router.delete(

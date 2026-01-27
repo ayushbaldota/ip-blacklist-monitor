@@ -24,6 +24,7 @@ class IPRepository:
         self,
         ip_address: str,
         description: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> IP:
         """Create a new IP record."""
         # Validate and get IP version
@@ -40,6 +41,7 @@ class IPRepository:
             ip_address=ip_address.strip(),
             ip_version=ip_version,
             description=description,
+            tags=tags or [],
             status="pending",
             blacklist_sources=[],
             is_active=True,
@@ -50,6 +52,37 @@ class IPRepository:
         await self.db.refresh(ip)
 
         logger.info("IP created", ip_id=ip.id, ip_address=ip_address)
+        return ip
+
+    async def update(
+        self,
+        ip_id: int,
+        description: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        is_active: Optional[bool] = None,
+    ) -> IP:
+        """Update an IP record."""
+        ip = await self.get_by_id(ip_id)
+        if not ip:
+            raise IPNotFoundError(ip_id)
+
+        update_data = {"updated_at": datetime.now(timezone.utc)}
+
+        if description is not None:
+            update_data["description"] = description
+        if tags is not None:
+            update_data["tags"] = tags
+        if is_active is not None:
+            update_data["is_active"] = is_active
+
+        await self.db.execute(
+            update(IP).where(IP.id == ip_id).values(**update_data)
+        )
+
+        await self.db.flush()
+        await self.db.refresh(ip)
+
+        logger.info("IP updated", ip_id=ip_id, fields=list(update_data.keys()))
         return ip
 
     async def get_by_id(self, ip_id: int) -> Optional[IP]:
@@ -73,6 +106,7 @@ class IPRepository:
         sort_by: str = "created_at",
         sort_order: str = "desc",
         search: Optional[str] = None,
+        tag: Optional[str] = None,
     ) -> Tuple[List[IP], int]:
         """
         Get paginated list of IPs.
@@ -93,6 +127,9 @@ class IPRepository:
                 (IP.ip_address.ilike(search_pattern))
                 | (IP.description.ilike(search_pattern))
             )
+        if tag:
+            # Filter by tag using JSONB contains operator
+            query = query.where(IP.tags.contains([tag]))
 
         # Get total count
         count_query = select(func.count()).select_from(query.subquery())
