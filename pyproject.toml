@@ -1,0 +1,85 @@
+[tool.poetry]
+name = "ip-blacklist-monitor"
+version = "1.0.0"
+description = "IP Blacklist Monitoring Microservice"
+authors = ["Development Team <team@example.com>"]
+readme = "README.md"
+python = "^3.11"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Web Framework
+fastapi = "^0.109.0"
+uvicorn = { version = "^0.27.0", extras = ["standard"] }
+python-multipart = "^0.0.7"
+
+# Database
+sqlalchemy = { version = "^2.0.25", extras = ["asyncio"] }
+asyncpg = "^0.29.0"
+alembic = "^1.13.1"
+
+# Task Scheduling
+apscheduler = "^3.10.4"
+
+# HTTP Client
+httpx = "^0.26.0"
+
+# DNS Lookups (for DNSBL)
+dnspython = "^2.5.0"
+
+# Configuration
+pydantic = "^2.6.0"
+pydantic-settings = "^2.1.0"
+python-dotenv = "^1.0.1"
+
+# Rate Limiting
+slowapi = "^0.1.9"
+
+# Logging
+structlog = "^24.1.0"
+python-json-logger = "^2.0.7"
+
+# Utilities
+tenacity = "^8.2.3"
+
+[tool.poetry.group.dev.dependencies]
+# Testing
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.3"
+pytest-cov = "^4.1.0"
+pytest-mock = "^3.12.0"
+factory-boy = "^3.3.0"
+faker = "^22.0.0"
+
+# Code Quality
+black = "^24.1.0"
+ruff = "^0.1.14"
+mypy = "^1.8.0"
+pre-commit = "^3.6.0"
+
+# Type Stubs
+types-python-dateutil = "^2.8.19"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --cov=app --cov-report=term-missing"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
