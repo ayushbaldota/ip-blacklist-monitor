@@ -1,10 +1,15 @@
 """Application configuration using Pydantic Settings."""
 
+import secrets
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Default insecure secret key - only for development
+_INSECURE_DEFAULT_SECRET = "change-this-to-a-secure-random-string"
 
 
 class Settings(BaseSettings):
@@ -22,7 +27,44 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = False
     log_level: str = "INFO"
-    secret_key: str = "change-this-to-a-secure-random-string"
+    secret_key: str = _INSECURE_DEFAULT_SECRET
+
+    @model_validator(mode='after')
+    def validate_secret_key(self) -> 'Settings':
+        """
+        Validate that secret_key is secure in production.
+
+        In production, the default insecure secret key will cause startup to fail.
+        In development, a warning is logged but the application continues.
+        """
+        is_production = self.app_env.lower() == "production"
+        is_insecure = self.secret_key == _INSECURE_DEFAULT_SECRET
+
+        if is_insecure:
+            if is_production:
+                raise ValueError(
+                    "SECURITY ERROR: The default secret_key is not allowed in production. "
+                    "Please set a secure SECRET_KEY environment variable with at least 32 random characters. "
+                    "You can generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+                )
+            # In development, generate a random key and warn
+            import warnings
+            self.secret_key = secrets.token_urlsafe(32)
+            warnings.warn(
+                "Using auto-generated secret_key for development. "
+                "Set SECRET_KEY environment variable for production.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Ensure minimum key length
+        if len(self.secret_key) < 32:
+            if is_production:
+                raise ValueError(
+                    "SECURITY ERROR: secret_key must be at least 32 characters long in production."
+                )
+
+        return self
 
     # API Server
     api_host: str = "0.0.0.0"
