@@ -22,13 +22,17 @@ from app.db.database import Base
 
 
 class IP(Base):
-    """IP address tracking model."""
+    """IP address tracking model.
+
+    Uses ip_address as the primary key instead of an auto-increment ID.
+    """
 
     __tablename__ = "ips"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ip_address: Mapped[str] = mapped_column(String(45), unique=True, nullable=False, index=True)
+    # IP address is the primary key
+    ip_address: Mapped[str] = mapped_column(String(45), primary_key=True)
     ip_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     tags: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     status: Mapped[str] = mapped_column(
@@ -55,10 +59,11 @@ class IP(Base):
         CheckConstraint("ip_version IN (4, 6)", name="check_ip_version"),
         CheckConstraint("status IN ('pending', 'clean', 'blacklisted')", name="check_status"),
         Index("idx_ips_is_active", "is_active", postgresql_where=(is_active == True)),
+        Index("idx_ips_status", "status"),
     )
 
     def __repr__(self) -> str:
-        return f"<IP(id={self.id}, ip_address={self.ip_address}, status={self.status})>"
+        return f"<IP(ip_address={self.ip_address}, name={self.name}, status={self.status})>"
 
 
 class IPHistory(Base):
@@ -67,8 +72,8 @@ class IPHistory(Base):
     __tablename__ = "ip_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ip_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("ips.id", ondelete="CASCADE"), nullable=False, index=True
+    ip_address: Mapped[str] = mapped_column(
+        String(45), ForeignKey("ips.ip_address", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     blacklist_sources: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
@@ -87,11 +92,11 @@ class IPHistory(Base):
         CheckConstraint(
             "status IN ('pending', 'clean', 'blacklisted')", name="check_history_status"
         ),
-        Index("idx_ip_history_ip_date", "ip_id", "checked_at"),
+        Index("idx_ip_history_ip_date", "ip_address", "checked_at"),
     )
 
     def __repr__(self) -> str:
-        return f"<IPHistory(id={self.id}, ip_id={self.ip_id}, status={self.status})>"
+        return f"<IPHistory(id={self.id}, ip_address={self.ip_address}, status={self.status})>"
 
 
 class APIKey(Base):
@@ -123,3 +128,52 @@ class APIKey(Base):
     def has_permission(self, permission: str) -> bool:
         """Check if API key has a specific permission."""
         return permission in self.permissions
+
+
+class ActivityLog(Base):
+    """Activity log model for tracking system events."""
+
+    __tablename__ = "activity_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True, index=True)
+    activity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    old_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    new_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    triggered_by: Mapped[str] = mapped_column(String(100), nullable=False, default="api")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "activity_type IN ('ip_added', 'ip_deleted', 'ip_updated', 'check_clean', 'check_blacklisted', 'status_change', 'manual_check')",
+            name="check_activity_type",
+        ),
+        Index("idx_activity_log_created_at_desc", created_at.desc()),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ActivityLog(id={self.id}, type={self.activity_type}, ip={self.ip_address})>"
+
+
+class DailyStats(Base):
+    """Daily statistics snapshot model."""
+
+    __tablename__ = "daily_stats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), unique=True, nullable=False, index=True
+    )
+    total_ips: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    clean_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blacklisted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pending_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<DailyStats(id={self.id}, date={self.date}, total={self.total_ips})>"

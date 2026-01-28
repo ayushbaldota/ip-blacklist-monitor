@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,15 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/ips", tags=["IPs"])
 
+# Reference to checker service (set by main app)
+_checker_service = None
+
+
+def set_checker_service(checker):
+    """Set checker service reference for manual checks."""
+    global _checker_service
+    _checker_service = checker
+
 
 @router.post(
     "",
@@ -43,7 +52,7 @@ router = APIRouter(prefix="/ips", tags=["IPs"])
     status_code=201,
     responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-@limiter.limit("30/minute")
+@limiter.limit("1200/minute")
 async def create_ip(
     request: Request,  # Required for rate limiter
     ip_data: IPCreate,
@@ -56,12 +65,13 @@ async def create_ip(
     try:
         ip = await repo.create(
             ip_address=ip_data.ip_address,
+            name=ip_data.name,
             description=ip_data.description,
             tags=ip_data.tags,
         )
         await db.commit()
 
-        logger.info("IP created via API", ip_id=ip.id, ip_address=ip.ip_address)
+        logger.info("IP created via API", ip_address=ip.ip_address)
 
         return DataResponse(
             data=IPResponse.model_validate(ip).model_dump(),
@@ -80,7 +90,7 @@ async def create_ip(
     status_code=201,
     responses={400: {"model": ErrorResponse}},
 )
-@limiter.limit("10/minute")
+@limiter.limit("1200/minute")
 async def create_ips_bulk(
     request: Request,
     bulk_data: IPBulkCreate,
@@ -102,11 +112,12 @@ async def create_ips_bulk(
         try:
             ip = await repo.create(
                 ip_address=ip_item.ip_address,
+                name=ip_item.name,
                 description=ip_item.description,
                 tags=combined_tags,
             )
             results.append(
-                IPBulkResult(ip_address=ip_item.ip_address, status="added", id=ip.id)
+                IPBulkResult(ip_address=ip_item.ip_address, status="added")
             )
             added += 1
         except IPAlreadyExistsError:
@@ -143,7 +154,7 @@ async def create_ips_bulk(
     response_model=DataResponse,
     responses={400: {"model": ErrorResponse}},
 )
-@limiter.limit("60/minute")
+@limiter.limit("1200/minute")
 async def list_ips(
     request: Request,
     page: int = Query(1, ge=1, description="Page number"),
@@ -152,7 +163,7 @@ async def list_ips(
     is_active: bool = Query(True, description="Filter by active status"),
     sort_by: str = Query("created_at", description="Sort field"),
     sort_order: str = Query("desc", description="Sort order"),
-    search: Optional[str] = Query(None, description="Search in IP or description"),
+    search: Optional[str] = Query(None, description="Search in IP, name, or description"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
     db: AsyncSession = Depends(get_db),
     api_key: APIKey = Depends(require_read_permission),
@@ -195,7 +206,7 @@ async def list_ips(
     response_model=DataResponse,
     responses={404: {"model": ErrorResponse}},
 )
-@limiter.limit("60/minute")
+@limiter.limit("1200/minute")
 async def lookup_ip(
     request: Request,
     ip: str = Query(..., description="IP address to look up"),
@@ -218,52 +229,71 @@ async def lookup_ip(
 
 
 @router.get(
-    "/{ip_id}",
+    "/{ip_address}",
     response_model=DataResponse,
     responses={404: {"model": ErrorResponse}},
 )
-@limiter.limit("60/minute")
+@limiter.limit("1200/minute")
 async def get_ip(
     request: Request,
-    ip_id: int,
+    ip_address: str,
     db: AsyncSession = Depends(get_db),
     api_key: APIKey = Depends(require_read_permission),
 ):
-    """Get a specific IP by ID."""
+    """Get a specific IP by its address."""
+    # Validate IP format
+    is_valid, _, error = validate_ip_address(ip_address)
+    if not is_valid:
+        raise ValidationError(error)
+
     repo = IPRepository(db)
-    ip = await repo.get_by_id(ip_id)
+    history_repo = HistoryRepository(db)
+    ip = await repo.get_by_address(ip_address)
 
     if not ip:
-        raise IPNotFoundError(ip_id)
+        raise IPNotFoundError(ip_address)
 
-    return DataResponse(data=IPResponse.model_validate(ip).model_dump())
+    # Get check count
+    check_count = await history_repo.get_check_count(ip_address)
+
+    # Build response with check_count
+    response = IPResponse.model_validate(ip)
+    response.check_count = check_count
+
+    return DataResponse(data=response.model_dump())
 
 
 @router.patch(
-    "/{ip_id}",
+    "/{ip_address}",
     response_model=DataResponse,
     responses={404: {"model": ErrorResponse}},
 )
-@limiter.limit("30/minute")
+@limiter.limit("1200/minute")
 async def update_ip(
     request: Request,
-    ip_id: int,
+    ip_address: str,
     ip_data: IPUpdate,
     db: AsyncSession = Depends(get_db),
     api_key: APIKey = Depends(require_write_permission),
 ):
     """Update an IP address metadata."""
+    # Validate IP format
+    is_valid, _, error = validate_ip_address(ip_address)
+    if not is_valid:
+        raise ValidationError(error)
+
     repo = IPRepository(db)
 
     ip = await repo.update(
-        ip_id=ip_id,
+        ip_address=ip_address,
+        name=ip_data.name,
         description=ip_data.description,
         tags=ip_data.tags,
         is_active=ip_data.is_active,
     )
     await db.commit()
 
-    logger.info("IP updated via API", ip_id=ip_id, ip_address=ip.ip_address)
+    logger.info("IP updated via API", ip_address=ip_address)
 
     return DataResponse(
         data=IPResponse.model_validate(ip).model_dump(),
@@ -272,28 +302,32 @@ async def update_ip(
 
 
 @router.delete(
-    "/{ip_id}",
+    "/{ip_address}",
     response_model=DataResponse,
     responses={404: {"model": ErrorResponse}},
 )
-@limiter.limit("30/minute")
+@limiter.limit("1200/minute")
 async def delete_ip(
     request: Request,
-    ip_id: int,
+    ip_address: str,
     db: AsyncSession = Depends(get_db),
     api_key: APIKey = Depends(require_write_permission),
 ):
     """Delete an IP address."""
+    # Validate IP format
+    is_valid, _, error = validate_ip_address(ip_address)
+    if not is_valid:
+        raise ValidationError(error)
+
     repo = IPRepository(db)
-    ip = await repo.delete(ip_id)
+    ip = await repo.delete(ip_address)
     await db.commit()
 
-    logger.info("IP deleted via API", ip_id=ip_id, ip_address=ip.ip_address)
+    logger.info("IP deleted via API", ip_address=ip_address)
 
     return DataResponse(
         data=IPDeleteResponse(
-            id=ip_id,
-            ip_address=ip.ip_address,
+            ip_address=ip_address,
             deleted_at=datetime.now(timezone.utc),
         ).model_dump(),
         message="IP address removed successfully",
@@ -301,14 +335,14 @@ async def delete_ip(
 
 
 @router.get(
-    "/{ip_id}/history",
+    "/{ip_address}/history",
     response_model=DataResponse,
     responses={404: {"model": ErrorResponse}},
 )
-@limiter.limit("60/minute")
+@limiter.limit("1200/minute")
 async def get_ip_history(
     request: Request,
-    ip_id: int,
+    ip_address: str,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     from_date: Optional[datetime] = Query(None),
@@ -317,17 +351,22 @@ async def get_ip_history(
     api_key: APIKey = Depends(require_read_permission),
 ):
     """Get check history for an IP."""
+    # Validate IP format
+    is_valid, _, error = validate_ip_address(ip_address)
+    if not is_valid:
+        raise ValidationError(error)
+
     ip_repo = IPRepository(db)
     history_repo = HistoryRepository(db)
 
     # Get IP record
-    ip = await ip_repo.get_by_id(ip_id)
+    ip = await ip_repo.get_by_address(ip_address)
     if not ip:
-        raise IPNotFoundError(ip_id)
+        raise IPNotFoundError(ip_address)
 
     # Get history
     history, total = await history_repo.get_history(
-        ip_id=ip_id,
+        ip_address=ip_address,
         page=page,
         per_page=per_page,
         from_date=from_date,
@@ -335,14 +374,13 @@ async def get_ip_history(
     )
 
     # Get summary
-    summary = await history_repo.get_summary(ip_id)
+    summary = await history_repo.get_summary(ip_address)
 
     total_pages = (total + per_page - 1) // per_page
 
     return DataResponse(
         data=IPHistoryResponse(
-            ip_id=ip_id,
-            ip_address=ip.ip_address,
+            ip_address=ip_address,
             current_status=ip.status,
             history=[IPHistoryEntry.model_validate(h) for h in history],
             pagination={
@@ -359,37 +397,153 @@ async def get_ip_history(
 
 
 @router.post(
-    "/{ip_id}/check",
+    "/bulk-check",
     response_model=DataResponse,
-    status_code=202,
+    status_code=200,
+)
+@limiter.limit("1200/minute")
+async def bulk_check(
+    request: Request,
+    ip_addresses: List[str] = Query(..., description="List of IP addresses to check"),
+    db: AsyncSession = Depends(get_db),
+    api_key: APIKey = Depends(require_write_permission),
+):
+    """Trigger immediate blacklist check for multiple IPs."""
+    import asyncio
+
+    repo = IPRepository(db)
+    results = []
+
+    async def check_single(ip_addr: str):
+        try:
+            ip = await repo.get_by_address(ip_addr)
+            if not ip:
+                return {"ip_address": ip_addr, "status": "error", "error": "IP not found"}
+
+            if _checker_service:
+                check_result = await _checker_service.check_single_ip(ip.ip_address)
+                new_status = "blacklisted" if check_result["is_blacklisted"] else "clean"
+
+                await repo.update_status(
+                    ip_address=ip_addr,
+                    status=new_status,
+                    blacklist_sources=check_result["blacklist_sources"],
+                    check_duration_ms=check_result["check_duration_ms"],
+                    triggered_by="manual",
+                )
+
+                return {
+                    "ip_address": ip_addr,
+                    "status": "completed",
+                    "new_status": new_status,
+                    "is_blacklisted": check_result["is_blacklisted"],
+                    "check_duration_ms": check_result["check_duration_ms"],
+                }
+            return {"ip_address": ip_addr, "status": "error", "error": "Checker not available"}
+        except Exception as e:
+            return {"ip_address": ip_addr, "status": "error", "error": str(e)}
+
+    # Run all checks concurrently (limit to 50)
+    results = await asyncio.gather(*[check_single(ip_addr) for ip_addr in ip_addresses[:50]])
+    await db.commit()
+
+    completed = sum(1 for r in results if r.get("status") == "completed")
+    errors = sum(1 for r in results if r.get("status") == "error")
+
+    logger.info("Bulk check completed", total=len(ip_addresses), completed=completed, errors=errors)
+
+    return DataResponse(
+        data={
+            "total": len(results),
+            "completed": completed,
+            "errors": errors,
+            "results": results,
+        },
+        message=f"Checked {completed} IPs",
+    )
+
+
+@router.post(
+    "/{ip_address}/check",
+    response_model=DataResponse,
+    status_code=200,
     responses={404: {"model": ErrorResponse}},
 )
-@limiter.limit("10/minute")
+@limiter.limit("1200/minute")
 async def trigger_check(
     request: Request,
-    ip_id: int,
+    ip_address: str,
     db: AsyncSession = Depends(get_db),
     api_key: APIKey = Depends(require_write_permission),
 ):
     """Trigger an immediate blacklist check for an IP."""
+    # Validate IP format
+    is_valid, _, error = validate_ip_address(ip_address)
+    if not is_valid:
+        raise ValidationError(error)
+
     repo = IPRepository(db)
-    ip = await repo.get_by_id(ip_id)
+    ip = await repo.get_by_address(ip_address)
 
     if not ip:
-        raise IPNotFoundError(ip_id)
+        raise IPNotFoundError(ip_address)
 
     # Generate a check ID for tracking
     check_id = f"chk_{uuid.uuid4().hex[:12]}"
 
-    logger.info("Manual check triggered", ip_id=ip_id, check_id=check_id)
+    logger.info("Manual check triggered", ip_address=ip_address, check_id=check_id)
 
-    # Note: In a full implementation, this would queue a background task
-    # For now, we return immediately with queued status
+    # Perform synchronous check if checker service is available
+    if _checker_service:
+        try:
+            check_result = await _checker_service.check_single_ip(ip.ip_address)
 
+            new_status = "blacklisted" if check_result["is_blacklisted"] else "clean"
+
+            # Update IP status in database
+            await repo.update_status(
+                ip_address=ip_address,
+                status=new_status,
+                blacklist_sources=check_result["blacklist_sources"],
+                check_duration_ms=check_result["check_duration_ms"],
+                triggered_by="manual",
+            )
+            await db.commit()
+
+            # Refresh to get updated data
+            ip = await repo.get_by_address(ip_address)
+
+            return DataResponse(
+                data={
+                    "ip_address": ip_address,
+                    "check_id": check_id,
+                    "status": "completed",
+                    "result": {
+                        "is_blacklisted": check_result["is_blacklisted"],
+                        "blacklist_sources": check_result["blacklist_sources"],
+                        "blacklists": check_result["blacklist_sources"],
+                        "providers_checked": check_result["providers_checked"],
+                        "check_duration_ms": check_result["check_duration_ms"],
+                    },
+                    "new_status": new_status,
+                },
+                message="Blacklist check completed",
+            )
+        except Exception as e:
+            logger.error("Manual check failed", ip_address=ip_address, error=str(e))
+            return DataResponse(
+                data=IPCheckResponse(
+                    ip_address=ip_address,
+                    check_id=check_id,
+                    status="error",
+                ).model_dump(),
+                message=f"Check failed: {str(e)}",
+            )
+
+    # Fallback if checker service not available
     return DataResponse(
         data=IPCheckResponse(
-            id=ip_id,
-            ip_address=ip.ip_address,
+            ip_address=ip_address,
             check_id=check_id,
             status="queued",
         ).model_dump(),

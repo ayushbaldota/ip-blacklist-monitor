@@ -15,8 +15,8 @@ logger = get_logger(__name__)
 
 # Whitelist of allowed sort columns to prevent SQL injection via attribute injection
 ALLOWED_SORT_COLUMNS = frozenset({
-    'id',
     'ip_address',
+    'name',
     'status',
     'created_at',
     'updated_at',
@@ -38,6 +38,7 @@ class IPRepository:
     async def create(
         self,
         ip_address: str,
+        name: Optional[str] = None,
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
     ) -> IP:
@@ -47,14 +48,18 @@ class IPRepository:
         if not is_valid:
             raise ValueError(error)
 
+        # Normalize IP address
+        normalized_ip = ip_address.strip()
+
         # Check if IP already exists
-        existing = await self.get_by_address(ip_address)
+        existing = await self.get_by_address(normalized_ip)
         if existing:
-            raise IPAlreadyExistsError(ip_address)
+            raise IPAlreadyExistsError(normalized_ip)
 
         ip = IP(
-            ip_address=ip_address.strip(),
+            ip_address=normalized_ip,
             ip_version=ip_version,
+            name=name,
             description=description,
             tags=tags or [],
             status="pending",
@@ -68,7 +73,6 @@ class IPRepository:
 
         # Log activity
         activity = ActivityLog(
-            ip_id=ip.id,
             ip_address=ip.ip_address,
             activity_type="ip_added",
             new_status="pending",
@@ -76,23 +80,26 @@ class IPRepository:
         )
         self.db.add(activity)
 
-        logger.info("IP created", ip_id=ip.id, ip_address=ip_address)
+        logger.info("IP created", ip_address=ip_address)
         return ip
 
     async def update(
         self,
-        ip_id: int,
+        ip_address: str,
+        name: Optional[str] = None,
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
         is_active: Optional[bool] = None,
     ) -> IP:
         """Update an IP record."""
-        ip = await self.get_by_id(ip_id)
+        ip = await self.get_by_address(ip_address)
         if not ip:
-            raise IPNotFoundError(ip_id)
+            raise IPNotFoundError(ip_address)
 
         update_data = {"updated_at": datetime.now(timezone.utc)}
 
+        if name is not None:
+            update_data["name"] = name
         if description is not None:
             update_data["description"] = description
         if tags is not None:
@@ -101,12 +108,11 @@ class IPRepository:
             update_data["is_active"] = is_active
 
         await self.db.execute(
-            update(IP).where(IP.id == ip_id).values(**update_data)
+            update(IP).where(IP.ip_address == ip_address).values(**update_data)
         )
 
         # Log activity
         activity = ActivityLog(
-            ip_id=ip_id,
             ip_address=ip.ip_address,
             activity_type="ip_updated",
             details={"updated_fields": list(update_data.keys())},
@@ -117,16 +123,11 @@ class IPRepository:
         await self.db.flush()
         await self.db.refresh(ip)
 
-        logger.info("IP updated", ip_id=ip_id, fields=list(update_data.keys()))
+        logger.info("IP updated", ip_address=ip_address, fields=list(update_data.keys()))
         return ip
 
-    async def get_by_id(self, ip_id: int) -> Optional[IP]:
-        """Get IP by ID."""
-        result = await self.db.execute(select(IP).where(IP.id == ip_id))
-        return result.scalar_one_or_none()
-
     async def get_by_address(self, ip_address: str) -> Optional[IP]:
-        """Get IP by address."""
+        """Get IP by address (primary key lookup)."""
         result = await self.db.execute(
             select(IP).where(IP.ip_address == ip_address.strip())
         )
@@ -162,6 +163,7 @@ class IPRepository:
             search_pattern = f"%{sanitized_search}%"
             query = query.where(
                 (IP.ip_address.ilike(search_pattern))
+                | (IP.name.ilike(search_pattern))
                 | (IP.description.ilike(search_pattern))
             )
         if tag:
@@ -199,22 +201,22 @@ class IPRepository:
     async def get_active_ips(self) -> List[IP]:
         """Get all active IPs for blacklist checking."""
         result = await self.db.execute(
-            select(IP).where(IP.is_active == True).order_by(IP.id)
+            select(IP).where(IP.is_active == True).order_by(IP.ip_address)
         )
         return list(result.scalars().all())
 
     async def update_status(
         self,
-        ip_id: int,
+        ip_address: str,
         status: str,
         blacklist_sources: List[Dict[str, Any]],
         check_duration_ms: Optional[int] = None,
         triggered_by: str = "scheduler",
     ) -> IP:
         """Update IP status after a blacklist check."""
-        ip = await self.get_by_id(ip_id)
+        ip = await self.get_by_address(ip_address)
         if not ip:
-            raise IPNotFoundError(ip_id)
+            raise IPNotFoundError(ip_address)
 
         now = datetime.now(timezone.utc)
         old_status = ip.status
@@ -222,7 +224,7 @@ class IPRepository:
         # Update IP record
         await self.db.execute(
             update(IP)
-            .where(IP.id == ip_id)
+            .where(IP.ip_address == ip_address)
             .values(
                 status=status,
                 blacklist_sources=blacklist_sources,
@@ -233,7 +235,7 @@ class IPRepository:
 
         # Create history record
         history = IPHistory(
-            ip_id=ip_id,
+            ip_address=ip_address,
             status=status,
             blacklist_sources=blacklist_sources,
             check_duration_ms=check_duration_ms,
@@ -247,8 +249,7 @@ class IPRepository:
             activity_type = "status_change"
 
         activity = ActivityLog(
-            ip_id=ip_id,
-            ip_address=ip.ip_address,
+            ip_address=ip_address,
             activity_type=activity_type,
             old_status=old_status,
             new_status=status,
@@ -265,25 +266,23 @@ class IPRepository:
 
         logger.info(
             "IP status updated",
-            ip_id=ip_id,
+            ip_address=ip_address,
             status=status,
             sources_count=len(blacklist_sources),
         )
 
         return ip
 
-    async def delete(self, ip_id: int) -> IP:
+    async def delete(self, ip_address: str) -> IP:
         """Delete an IP record."""
-        ip = await self.get_by_id(ip_id)
+        ip = await self.get_by_address(ip_address)
         if not ip:
-            raise IPNotFoundError(ip_id)
+            raise IPNotFoundError(ip_address)
 
-        ip_address = ip.ip_address
         old_status = ip.status
 
-        # Log activity before deleting (with ip_id set to NULL since we're deleting)
+        # Log activity before deleting
         activity = ActivityLog(
-            ip_id=None,  # Will be NULL since we're deleting the IP
             ip_address=ip_address,
             activity_type="ip_deleted",
             old_status=old_status,
@@ -291,44 +290,44 @@ class IPRepository:
         )
         self.db.add(activity)
 
-        await self.db.execute(delete(IP).where(IP.id == ip_id))
+        await self.db.execute(delete(IP).where(IP.ip_address == ip_address))
         await self.db.flush()
 
-        logger.info("IP deleted", ip_id=ip_id, ip_address=ip_address)
+        logger.info("IP deleted", ip_address=ip_address)
         return ip
 
-    async def deactivate(self, ip_id: int) -> IP:
+    async def deactivate(self, ip_address: str) -> IP:
         """Soft delete by deactivating an IP."""
-        ip = await self.get_by_id(ip_id)
+        ip = await self.get_by_address(ip_address)
         if not ip:
-            raise IPNotFoundError(ip_id)
+            raise IPNotFoundError(ip_address)
 
         await self.db.execute(
             update(IP)
-            .where(IP.id == ip_id)
+            .where(IP.ip_address == ip_address)
             .values(is_active=False, updated_at=datetime.now(timezone.utc))
         )
 
         await self.db.flush()
         await self.db.refresh(ip)
 
-        logger.info("IP deactivated", ip_id=ip_id)
+        logger.info("IP deactivated", ip_address=ip_address)
         return ip
 
     async def get_stats(self) -> Dict[str, Any]:
         """Get IP statistics."""
         # Total and active counts
-        total_result = await self.db.execute(select(func.count(IP.id)))
+        total_result = await self.db.execute(select(func.count(IP.ip_address)))
         total = total_result.scalar() or 0
 
         active_result = await self.db.execute(
-            select(func.count(IP.id)).where(IP.is_active == True)
+            select(func.count(IP.ip_address)).where(IP.is_active == True)
         )
         active = active_result.scalar() or 0
 
         # Count by status
         status_result = await self.db.execute(
-            select(IP.status, func.count(IP.id))
+            select(IP.status, func.count(IP.ip_address))
             .where(IP.is_active == True)
             .group_by(IP.status)
         )
@@ -336,7 +335,7 @@ class IPRepository:
 
         # Count by IP version
         version_result = await self.db.execute(
-            select(IP.ip_version, func.count(IP.id))
+            select(IP.ip_version, func.count(IP.ip_address))
             .where(IP.is_active == True)
             .group_by(IP.ip_version)
         )

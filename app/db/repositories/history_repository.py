@@ -20,7 +20,7 @@ class HistoryRepository:
 
     async def get_history(
         self,
-        ip_id: int,
+        ip_address: str,
         page: int = 1,
         per_page: int = 50,
         from_date: Optional[datetime] = None,
@@ -40,7 +40,7 @@ class HistoryRepository:
 
         query = (
             select(IPHistory)
-            .where(IPHistory.ip_id == ip_id)
+            .where(IPHistory.ip_address == ip_address)
             .where(IPHistory.checked_at >= from_date)
             .where(IPHistory.checked_at <= to_date)
         )
@@ -59,11 +59,11 @@ class HistoryRepository:
 
         return history, total
 
-    async def get_summary(self, ip_id: int) -> Dict[str, Any]:
+    async def get_summary(self, ip_address: str) -> Dict[str, Any]:
         """Get summary statistics for an IP's history."""
         # Total checks
         total_result = await self.db.execute(
-            select(func.count(IPHistory.id)).where(IPHistory.ip_id == ip_id)
+            select(func.count(IPHistory.id)).where(IPHistory.ip_address == ip_address)
         )
         total_checks = total_result.scalar() or 0
 
@@ -79,14 +79,14 @@ class HistoryRepository:
         # Count by status
         status_result = await self.db.execute(
             select(IPHistory.status, func.count(IPHistory.id))
-            .where(IPHistory.ip_id == ip_id)
+            .where(IPHistory.ip_address == ip_address)
             .group_by(IPHistory.status)
         )
         status_counts = {row[0]: row[1] for row in status_result.all()}
 
         # First check
         first_result = await self.db.execute(
-            select(func.min(IPHistory.checked_at)).where(IPHistory.ip_id == ip_id)
+            select(func.min(IPHistory.checked_at)).where(IPHistory.ip_address == ip_address)
         )
         first_check = first_result.scalar()
 
@@ -136,8 +136,8 @@ class HistoryRepository:
 
         # Get history with IP info
         query = (
-            select(IPHistory, IP.ip_address)
-            .join(IP, IPHistory.ip_id == IP.id)
+            select(IPHistory, IP.name)
+            .join(IP, IPHistory.ip_address == IP.ip_address)
             .where(IPHistory.checked_at >= since)
             .order_by(IPHistory.checked_at.desc())
             .limit(limit)
@@ -147,9 +147,10 @@ class HistoryRepository:
         rows = result.all()
 
         changes = []
-        for history, ip_address in rows:
+        for history, ip_name in rows:
             changes.append({
-                "ip_address": ip_address,
+                "ip_address": history.ip_address,
+                "name": ip_name,
                 "status": history.status,
                 "blacklist_sources": history.blacklist_sources,
                 "checked_at": history.checked_at,
@@ -186,8 +187,8 @@ class HistoryRepository:
     async def get_recent_activity(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent activity for the dashboard."""
         query = (
-            select(IPHistory, IP.ip_address)
-            .join(IP, IPHistory.ip_id == IP.id)
+            select(IPHistory, IP.name)
+            .join(IP, IPHistory.ip_address == IP.ip_address)
             .order_by(IPHistory.checked_at.desc())
             .limit(limit)
         )
@@ -196,14 +197,21 @@ class HistoryRepository:
         rows = result.all()
 
         activities = []
-        for history, ip_address in rows:
+        for history, ip_name in rows:
             activities.append({
                 "id": history.id,
-                "ip_address": ip_address,
-                "ip_id": history.ip_id,
+                "ip_address": history.ip_address,
+                "name": ip_name,
                 "status": history.status,
                 "blacklist_count": len(history.blacklist_sources) if history.blacklist_sources else 0,
                 "checked_at": history.checked_at.isoformat() if history.checked_at else None,
             })
 
         return activities
+
+    async def get_check_count(self, ip_address: str) -> int:
+        """Get total check count for an IP."""
+        result = await self.db.execute(
+            select(func.count(IPHistory.id)).where(IPHistory.ip_address == ip_address)
+        )
+        return result.scalar() or 0

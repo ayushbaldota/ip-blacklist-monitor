@@ -123,7 +123,7 @@ class BlacklistCheckerService:
 
                 # Update database
                 await ip_repo.update_status(
-                    ip_id=ip_record.id,
+                    ip_address=ip_record.ip_address,
                     status=new_status,
                     blacklist_sources=check_result["blacklist_sources"],
                     check_duration_ms=check_result["check_duration_ms"],
