@@ -129,7 +129,13 @@ class BlacklistCheckerService:
                     check_duration_ms=check_result["check_duration_ms"],
                 )
 
-                # Track status changes
+                # Track status changes and handle notifications
+                # Notification logic: Only notify ONCE per blacklist event, not every check
+                should_notify = (
+                    self.slack
+                    and not ip_record.notifications_muted
+                )
+
                 if previous_status != new_status:
                     if new_status == "blacklisted":
                         results["newly_blacklisted"].append(
@@ -138,22 +144,36 @@ class BlacklistCheckerService:
                                 "sources": check_result["blacklist_sources"],
                             }
                         )
-                        # Send Slack notification for newly blacklisted
-                        if self.slack:
+                        # Send ONE notification for newly blacklisted IP
+                        # Only if: not muted AND we haven't already notified for this blacklist
+                        if should_notify and ip_record.last_notified_status != "blacklisted":
                             await self.slack.send_blacklist_alert(
                                 ip_record.ip_address,
                                 check_result["blacklist_sources"],
+                                ip_name=ip_record.name,
+                            )
+                            # Mark as notified to prevent duplicate notifications
+                            await ip_repo.update_notification_status(
+                                ip_record.ip_address,
+                                notified_status="blacklisted",
                             )
                     else:
                         results["newly_clean"].append(ip_record.ip_address)
-                        # Notify when IP is delisted
-                        if self.slack:
+                        # Notify when IP is delisted (status changed from blacklisted to clean)
+                        if should_notify and previous_status == "blacklisted":
                             await self.slack.send_delisted_notification(
-                                ip_record.ip_address
+                                ip_record.ip_address,
+                                ip_name=ip_record.name,
+                            )
+                            # Clear notification status so future blacklist events trigger alerts
+                            await ip_repo.update_notification_status(
+                                ip_record.ip_address,
+                                notified_status="clean",
                             )
                 else:
                     if new_status == "blacklisted":
                         results["still_blacklisted"].append(ip_record.ip_address)
+                        # Don't send repeat notifications for still-blacklisted IPs
                     else:
                         results["still_clean"].append(ip_record.ip_address)
 

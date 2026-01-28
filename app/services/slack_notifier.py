@@ -47,8 +47,9 @@ class SlackNotifier:
         self,
         ip_address: str,
         blacklist_sources: List[Dict[str, Any]],
+        ip_name: Optional[str] = None,
     ) -> bool:
-        """Send alert when IP is newly blacklisted."""
+        """Send alert when IP is newly blacklisted (one-time notification)."""
         if not self.enabled:
             logger.debug("Slack notifications disabled, skipping alert")
             return True
@@ -59,6 +60,11 @@ class SlackNotifier:
                 for s in blacklist_sources
             ]
         )
+
+        # Include IP name if available
+        ip_display = f"`{ip_address}`"
+        if ip_name:
+            ip_display = f"`{ip_address}` ({ip_name})"
 
         payload = {
             "blocks": [
@@ -73,8 +79,8 @@ class SlackNotifier:
                 {
                     "type": "section",
                     "fields": [
-                        {"type": "mrkdwn", "text": f"*IP Address:*\n`{ip_address}`"},
-                        {"type": "mrkdwn", "text": "*Status:*\nBlacklisted"},
+                        {"type": "mrkdwn", "text": f"*IP Address:*\n{ip_display}"},
+                        {"type": "mrkdwn", "text": f"*Status:*\nBlacklisted ({len(blacklist_sources)} list{'s' if len(blacklist_sources) != 1 else ''})"},
                     ],
                 },
                 {
@@ -89,7 +95,7 @@ class SlackNotifier:
                     "elements": [
                         {
                             "type": "mrkdwn",
-                            "text": f"Detected at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+                            "text": f"Detected at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC | _This is a one-time alert_",
                         }
                     ],
                 },
@@ -114,10 +120,19 @@ class SlackNotifier:
 
         return await self._send_message(payload)
 
-    async def send_delisted_notification(self, ip_address: str) -> bool:
+    async def send_delisted_notification(
+        self,
+        ip_address: str,
+        ip_name: Optional[str] = None,
+    ) -> bool:
         """Send notification when IP is removed from all blacklists."""
         if not self.enabled:
             return True
+
+        # Include IP name if available
+        ip_display = f"`{ip_address}`"
+        if ip_name:
+            ip_display = f"`{ip_address}` ({ip_name})"
 
         payload = {
             "blocks": [
@@ -133,7 +148,7 @@ class SlackNotifier:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Good news! `{ip_address}` is no longer on any monitored blacklists.",
+                        "text": f"Good news! {ip_display} is no longer on any monitored blacklists.",
                     },
                 },
                 {

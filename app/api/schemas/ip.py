@@ -144,6 +144,10 @@ class IPResponse(BaseModel):
     listings: int = 0
     check_count: int = 0
     is_active: bool
+    # Notification muting fields
+    notifications_muted: bool = False
+    last_notified_status: Optional[str] = None
+    last_notified_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

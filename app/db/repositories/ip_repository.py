@@ -314,6 +314,43 @@ class IPRepository:
         logger.info("IP deactivated", ip_address=ip_address)
         return ip
 
+    async def mute_notifications(self, ip_address: str, muted: bool = True) -> IP:
+        """Mute or unmute notifications for an IP."""
+        ip = await self.get_by_address(ip_address)
+        if not ip:
+            raise IPNotFoundError(ip_address)
+
+        await self.db.execute(
+            update(IP)
+            .where(IP.ip_address == ip_address)
+            .values(
+                notifications_muted=muted,
+                updated_at=datetime.now(timezone.utc)
+            )
+        )
+
+        await self.db.flush()
+        await self.db.refresh(ip)
+
+        logger.info("IP notifications muted" if muted else "IP notifications unmuted", ip_address=ip_address)
+        return ip
+
+    async def update_notification_status(
+        self,
+        ip_address: str,
+        notified_status: str,
+    ) -> None:
+        """Update the last notified status for an IP (called after sending notification)."""
+        await self.db.execute(
+            update(IP)
+            .where(IP.ip_address == ip_address)
+            .values(
+                last_notified_status=notified_status,
+                last_notified_at=datetime.now(timezone.utc),
+            )
+        )
+        await self.db.flush()
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get IP statistics."""
         # Total and active counts

@@ -43,6 +43,10 @@ class IP(Base):
     )
     blacklist_sources: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Notification muting - prevents repeated alerts for same blacklist event
+    notifications_muted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_notified_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    last_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

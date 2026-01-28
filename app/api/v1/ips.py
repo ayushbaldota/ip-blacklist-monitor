@@ -334,6 +334,77 @@ async def delete_ip(
     )
 
 
+@router.post(
+    "/{ip_address}/mute",
+    response_model=DataResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+@limiter.limit("1200/minute")
+async def mute_ip_notifications(
+    request: Request,
+    ip_address: str,
+    db: AsyncSession = Depends(get_db),
+    api_key: APIKey = Depends(require_write_permission),
+):
+    """Mute notifications for an IP address.
+
+    When muted, no Slack notifications will be sent for this IP,
+    even if it becomes blacklisted.
+    """
+    # Validate IP format
+    is_valid, _, error = validate_ip_address(ip_address)
+    if not is_valid:
+        raise ValidationError(error)
+
+    repo = IPRepository(db)
+    ip = await repo.mute_notifications(ip_address, muted=True)
+    await db.commit()
+
+    logger.info("IP notifications muted", ip_address=ip_address)
+
+    return DataResponse(
+        data=IPResponse.model_validate(ip).model_dump(),
+        message="Notifications muted for this IP",
+    )
+
+
+@router.post(
+    "/{ip_address}/unmute",
+    response_model=DataResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+@limiter.limit("1200/minute")
+async def unmute_ip_notifications(
+    request: Request,
+    ip_address: str,
+    db: AsyncSession = Depends(get_db),
+    api_key: APIKey = Depends(require_write_permission),
+):
+    """Unmute notifications for an IP address.
+
+    Re-enables Slack notifications for this IP. A new notification
+    will be sent if the IP is currently blacklisted.
+    """
+    # Validate IP format
+    is_valid, _, error = validate_ip_address(ip_address)
+    if not is_valid:
+        raise ValidationError(error)
+
+    repo = IPRepository(db)
+    ip = await repo.mute_notifications(ip_address, muted=False)
+    # Also clear last_notified_status so they get a fresh notification if currently blacklisted
+    if ip.status == "blacklisted":
+        await repo.update_notification_status(ip_address, notified_status=None)
+    await db.commit()
+
+    logger.info("IP notifications unmuted", ip_address=ip_address)
+
+    return DataResponse(
+        data=IPResponse.model_validate(ip).model_dump(),
+        message="Notifications enabled for this IP",
+    )
+
+
 @router.get(
     "/{ip_address}/history",
     response_model=DataResponse,
