@@ -205,6 +205,33 @@ class IPRepository:
         )
         return list(result.scalars().all())
 
+    async def reset_all_to_pending(self) -> int:
+        """
+        Reset all active IPs to pending status.
+        Used before a full check-all operation.
+
+        Returns:
+            Number of IPs reset
+        """
+        now = datetime.now(timezone.utc)
+
+        # Update all active IPs to pending
+        result = await self.db.execute(
+            update(IP)
+            .where(IP.is_active == True)
+            .values(
+                status="pending",
+                blacklist_sources=[],
+                updated_at=now,
+            )
+        )
+
+        await self.db.flush()
+
+        count = result.rowcount
+        logger.info("Reset all IPs to pending", count=count)
+        return count
+
     async def update_status(
         self,
         ip_address: str,

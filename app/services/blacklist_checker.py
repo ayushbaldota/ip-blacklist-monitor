@@ -21,7 +21,7 @@ class BlacklistCheckerService:
         self,
         providers: List[BlacklistProvider],
         slack_notifier: Optional[SlackNotifier] = None,
-        max_concurrent_checks: int = 10,
+        max_concurrent_checks: int = 200,
     ):
         """
         Initialize the blacklist checker service.
@@ -29,7 +29,7 @@ class BlacklistCheckerService:
         Args:
             providers: List of blacklist providers to check against
             slack_notifier: Optional Slack notifier for alerts
-            max_concurrent_checks: Maximum concurrent provider checks
+            max_concurrent_checks: Maximum concurrent provider checks (default: 200 for high throughput)
         """
         self.providers = providers
         self.slack = slack_notifier

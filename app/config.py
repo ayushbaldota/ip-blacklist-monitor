@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # DNSBL Providers
     dnsbl_enabled: bool = True
     dnsbl_zones: str = "zen.spamhaus.org,dnsbl-1.uceprotect.net,dnsbl-2.uceprotect.net,dnsbl-3.uceprotect.net,dyna.spamrats.com,noptr.spamrats.com,spam.spamrats.com,b.barracudacentral.org,bl.spamcop.net,dnsbl.sorbs.net,psbl.surriel.com,cbl.abuseat.org,bl.blocklist.de,dnsbl.dronebl.org"
-    dnsbl_timeout: int = 5
+    dnsbl_timeout: int = 2  # Reduced from 5s for higher throughput
 
     # AbuseIPDB (Optional)
     abuseipdb_enabled: bool = False
@@ -100,8 +100,11 @@ class Settings(BaseSettings):
     # Scheduler
     scheduler_enabled: bool = True
     check_interval_hours: int = 3
-    check_max_concurrent: int = 10
+    check_max_concurrent: int = 200  # Increased from 10 for higher throughput
     check_timeout_seconds: int = 300
+
+    # Check-All Job Settings
+    check_all_max_concurrent_ips: int = 50  # Max IPs to check concurrently in check-all job
 
     # History Management
     history_retention_days: int = 7

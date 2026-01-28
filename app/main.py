@@ -10,13 +10,14 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api.v1 import health
+from app.api.v1 import health, ips
 from app.api.v1.router import router as api_router
 from app.config import get_settings
 from app.core.exceptions import AppException
 from app.core.rate_limiter import limiter
 from app.db.database import close_db, init_db
 from app.services.blacklist_checker import BlacklistCheckerService
+from app.services.check_job_manager import CheckJobManager
 from app.services.providers.dnsbl import create_dnsbl_providers
 from app.services.slack_notifier import SlackNotifier
 from app.tasks.scheduler import SchedulerService
@@ -31,12 +32,13 @@ settings = get_settings()
 checker_service: BlacklistCheckerService = None
 scheduler_service: SchedulerService = None
 slack_notifier: SlackNotifier = None
+job_manager: CheckJobManager = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown."""
-    global checker_service, scheduler_service, slack_notifier
+    global checker_service, scheduler_service, slack_notifier, job_manager
 
     logger.info("Starting application", app_name=settings.app_name, env=settings.app_env)
 
@@ -65,6 +67,13 @@ async def lifespan(app: FastAPI):
         max_concurrent_checks=settings.check_max_concurrent,
     )
 
+    # Initialize check-all job manager
+    job_manager = CheckJobManager(
+        checker=checker_service,
+        max_concurrent_ips=settings.check_all_max_concurrent_ips,
+    )
+    logger.info("Check-all job manager initialized")
+
     # Initialize and start scheduler
     scheduler_service = SchedulerService(
         checker=checker_service,
@@ -74,6 +83,10 @@ async def lifespan(app: FastAPI):
 
     # Set services for health endpoint
     health.set_services(scheduler_service, checker_service)
+
+    # Set checker service and job manager for IPs endpoint
+    ips.set_checker_service(checker_service)
+    ips.set_job_manager(job_manager)
 
     # Start scheduler
     await scheduler_service.start()

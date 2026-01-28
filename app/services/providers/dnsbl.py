@@ -138,13 +138,13 @@ DNSBL_ZONES: Dict[str, Dict[str, Any]] = {
 class DNSBLProvider(BlacklistProvider):
     """DNS-based blacklist provider."""
 
-    def __init__(self, zone: str, timeout: float = 5.0):
+    def __init__(self, zone: str, timeout: float = 2.0):
         """
         Initialize DNSBL provider.
 
         Args:
             zone: The DNSBL zone to query (e.g., 'zen.spamhaus.org')
-            timeout: DNS query timeout in seconds
+            timeout: DNS query timeout in seconds (default: 2s for high throughput)
         """
         self.zone = zone
         self.zone_config = DNSBL_ZONES.get(
@@ -290,7 +290,7 @@ class DNSBLProvider(BlacklistProvider):
 
 
 def create_dnsbl_providers(
-    zones: list[str], timeout: float = 5.0
+    zones: list[str], timeout: float = 2.0
 ) -> list[DNSBLProvider]:
     """
     Create DNSBL provider instances for the given zones.

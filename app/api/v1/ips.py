@@ -38,12 +38,19 @@ router = APIRouter(prefix="/ips", tags=["IPs"])
 
 # Reference to checker service (set by main app)
 _checker_service = None
+_job_manager = None
 
 
 def set_checker_service(checker):
     """Set checker service reference for manual checks."""
     global _checker_service
     _checker_service = checker
+
+
+def set_job_manager(job_manager):
+    """Set job manager reference for check-all operations."""
+    global _job_manager
+    _job_manager = job_manager
 
 
 @router.post(
@@ -619,4 +626,187 @@ async def trigger_check(
             status="queued",
         ).model_dump(),
         message="Blacklist check queued",
+    )
+
+
+# ============================================================
+# Check-All Endpoints (Background Job-based)
+# ============================================================
+
+
+@router.get(
+    "/check-all/current",
+    response_model=DataResponse,
+)
+@limiter.limit("600/minute")
+async def get_current_check_job(
+    request: Request,
+    api_key: APIKey = Depends(require_read_permission),
+):
+    """
+    Get the currently running check-all job, if any.
+
+    Returns null if no job is running.
+    """
+    if not _job_manager:
+        return DataResponse(data=None, message="No job running")
+
+    current_job = _job_manager.get_current_job()
+    return DataResponse(
+        data=current_job,
+        message="Current job retrieved" if current_job else "No job running",
+    )
+
+
+@router.post(
+    "/check-all",
+    response_model=DataResponse,
+    status_code=202,
+    responses={400: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+)
+@limiter.limit("10/minute")
+async def start_check_all_job(
+    request: Request,
+    api_key: APIKey = Depends(require_write_permission),
+):
+    """
+    Start a background job to check all active IPs against blacklists.
+
+    This will:
+    1. Reset all IPs to 'pending' status
+    2. Start checking all IPs in the background
+    3. Return immediately with a job_id for polling
+
+    Returns immediately with a job_id that can be used to poll for progress.
+    This endpoint is rate-limited to prevent abuse.
+    """
+    if not _job_manager:
+        from app.core.exceptions import AppException
+        raise AppException(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Job manager not available",
+        )
+
+    try:
+        job_info = await _job_manager.start_job()
+
+        logger.info(
+            "Check-all job started via API",
+            job_id=job_info["job_id"],
+            total_ips=job_info["total_ips"],
+        )
+
+        return DataResponse(
+            data=job_info,
+            message="Check-all job started. All IPs reset to pending and checking started.",
+        )
+
+    except ValueError as e:
+        from app.core.exceptions import ValidationError
+        raise ValidationError(str(e))
+    except Exception as e:
+        logger.error("Failed to start check-all job", error=str(e))
+        from app.core.exceptions import AppException
+        raise AppException(
+            status_code=500,
+            code="JOB_START_FAILED",
+            message=f"Failed to start check-all job: {str(e)}",
+        )
+
+
+@router.get(
+    "/check-all/{job_id}/status",
+    response_model=DataResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+@limiter.limit("600/minute")
+async def get_check_job_status(
+    request: Request,
+    job_id: str,
+    api_key: APIKey = Depends(require_read_permission),
+):
+    """
+    Get the status of a check-all job.
+
+    Returns progress information including:
+    - status: pending, running, completed, cancelled, failed
+    - progress: percentage complete (0-100)
+    - checked: number of IPs checked
+    - total: total number of IPs
+    - clean: number of clean IPs
+    - blacklisted: number of blacklisted IPs
+    - errors: number of check errors
+    """
+    if not _job_manager:
+        from app.core.exceptions import AppException
+        raise AppException(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Job manager not available",
+        )
+
+    status = await _job_manager.get_job_status(job_id)
+
+    if not status:
+        from app.core.exceptions import AppException
+        raise AppException(
+            status_code=404,
+            code="JOB_NOT_FOUND",
+            message=f"Job {job_id} not found",
+        )
+
+    return DataResponse(data=status)
+
+
+@router.post(
+    "/check-all/{job_id}/cancel",
+    response_model=DataResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+@limiter.limit("30/minute")
+async def cancel_check_job(
+    request: Request,
+    job_id: str,
+    api_key: APIKey = Depends(require_write_permission),
+):
+    """
+    Cancel a running check-all job.
+
+    Returns success if the job was cancelled, or an error if the job
+    was not found or already completed.
+    """
+    if not _job_manager:
+        from app.core.exceptions import AppException
+        raise AppException(
+            status_code=503,
+            code="SERVICE_UNAVAILABLE",
+            message="Job manager not available",
+        )
+
+    cancelled = await _job_manager.cancel_job(job_id)
+
+    if not cancelled:
+        # Check if job exists
+        status = await _job_manager.get_job_status(job_id)
+        if not status:
+            from app.core.exceptions import AppException
+            raise AppException(
+                status_code=404,
+                code="JOB_NOT_FOUND",
+                message=f"Job {job_id} not found",
+            )
+        else:
+            from app.core.exceptions import AppException
+            raise AppException(
+                status_code=400,
+                code="JOB_NOT_CANCELLABLE",
+                message=f"Job {job_id} is already {status['status']} and cannot be cancelled",
+            )
+
+    logger.info("Check-all job cancelled via API", job_id=job_id)
+
+    return DataResponse(
+        data={"job_id": job_id, "cancelled": True},
+        message="Job cancelled successfully",
     )
