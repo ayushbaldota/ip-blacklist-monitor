@@ -121,6 +121,12 @@ class Settings(BaseSettings):
     # Check-All Job Settings
     check_all_max_concurrent_ips: int = 50  # Max IPs to check concurrently in check-all job
 
+    # PTR (Hostname) Update Settings
+    ptr_update_enabled: bool = True
+    ptr_update_interval_hours: int = 3  # How often to refresh PTR records
+    ptr_update_batch_size: int = 50  # IPs to process concurrently
+    ptr_update_timeout: float = 3.0  # DNS lookup timeout in seconds
+
     # History Management
     history_retention_days: int = 7
 

@@ -444,3 +444,29 @@ class IPRepository:
                 "ipv6": by_version.get("ipv6", 0),
             },
         }
+
+    async def update_hostname(self, ip_address: str, hostname: Optional[str]) -> None:
+        """
+        Update the hostname for a single IP address.
+
+        Args:
+            ip_address: The IP address to update
+            hostname: The resolved hostname (PTR record), or None if not found
+        """
+        await self.db.execute(
+            update(IP)
+            .where(IP.ip_address == ip_address)
+            .values(hostname=hostname, updated_at=datetime.now(timezone.utc))
+        )
+
+    async def get_all_active_ip_addresses(self) -> List[str]:
+        """
+        Get all active IP addresses for hostname updates.
+
+        Returns:
+            List of IP address strings
+        """
+        result = await self.db.execute(
+            select(IP.ip_address).where(IP.is_active == True).order_by(IP.ip_address)
+        )
+        return [row[0] for row in result.all()]

@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.activity_repository import StatsRepository
 from app.services.blacklist_checker import BlacklistCheckerService
+from app.services.hostname_update import get_hostname_update_service
 from app.services.slack_notifier import SlackNotifier
 from app.utils.logging import get_logger
 
@@ -44,6 +45,9 @@ class SchedulerService:
         self._is_running = False
         self._last_run: Optional[datetime] = None
         self._next_run: Optional[datetime] = None
+        # PTR update tracking
+        self._ptr_last_run: Optional[datetime] = None
+        self._ptr_next_run: Optional[datetime] = None
 
     def setup(self) -> None:
         """Initialize the scheduler."""
@@ -83,17 +87,36 @@ class SchedulerService:
             replace_existing=True,
         )
 
+        # Register the PTR (hostname) update job if enabled
+        if settings.ptr_update_enabled:
+            self._scheduler.add_job(
+                self._run_ptr_update,
+                "interval",
+                hours=settings.ptr_update_interval_hours,
+                id="ptr_update",
+                name="Scheduled PTR Update",
+                replace_existing=True,
+            )
+            logger.info(
+                "PTR update job registered",
+                interval_hours=settings.ptr_update_interval_hours,
+            )
+
         self._scheduler.start()
         self._is_running = True
 
-        # Get next run time
+        # Get next run times
         job = self._scheduler.get_job("blacklist_check")
         self._next_run = job.next_run_time if job else None
+
+        ptr_job = self._scheduler.get_job("ptr_update")
+        self._ptr_next_run = ptr_job.next_run_time if ptr_job else None
 
         logger.info(
             "Scheduler started",
             interval_hours=self.check_interval_hours,
             next_run=self._next_run.isoformat() if self._next_run else None,
+            ptr_next_run=self._ptr_next_run.isoformat() if self._ptr_next_run else None,
         )
 
     async def _run_check(self) -> None:
@@ -161,6 +184,32 @@ class SchedulerService:
             job = self._scheduler.get_job("blacklist_check")
             self._next_run = job.next_run_time if job else None
 
+    async def _run_ptr_update(self) -> None:
+        """Run the scheduled PTR (hostname) update."""
+        logger.info("Starting scheduled PTR update job")
+        self._ptr_last_run = datetime.now(timezone.utc)
+
+        try:
+            # Get the hostname update service and run update
+            hostname_service = get_hostname_update_service()
+            stats = await hostname_service.run_update()
+
+            logger.info(
+                "PTR update job completed",
+                total=stats.get("total", 0),
+                updated=stats.get("updated", 0),
+                no_ptr=stats.get("no_ptr", 0),
+                errors=stats.get("errors", 0),
+            )
+
+        except Exception as e:
+            logger.exception("PTR update job failed", error=str(e))
+
+        # Update next run time
+        if self._scheduler:
+            job = self._scheduler.get_job("ptr_update")
+            self._ptr_next_run = job.next_run_time if job else None
+
     async def run_now(self) -> None:
         """Trigger an immediate check outside the schedule."""
         logger.info("Triggering immediate blacklist check")
@@ -181,6 +230,11 @@ class SchedulerService:
             "interval_hours": self.check_interval_hours,
             "last_run": self._last_run.isoformat() if self._last_run else None,
             "next_run": self._next_run.isoformat() if self._next_run else None,
+            # PTR update status
+            "ptr_update_enabled": settings.ptr_update_enabled,
+            "ptr_update_interval_hours": settings.ptr_update_interval_hours,
+            "ptr_last_run": self._ptr_last_run.isoformat() if self._ptr_last_run else None,
+            "ptr_next_run": self._ptr_next_run.isoformat() if self._ptr_next_run else None,
         }
 
     @property
