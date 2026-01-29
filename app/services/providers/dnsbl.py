@@ -1,4 +1,24 @@
-"""DNSBL (DNS-based Blacklist) provider implementation."""
+"""
+DNSBL (DNS-based Blacklist) Provider Implementation.
+
+This module provides the core DNSBL checking functionality. It queries DNS-based
+blacklists to determine if an IP address has been flagged for spam, abuse, or
+other malicious activity.
+
+How DNSBL works:
+1. Reverse the IP address octets (1.2.3.4 -> 4.3.2.1)
+2. Append the DNSBL zone (4.3.2.1.zen.spamhaus.org)
+3. Perform DNS A record lookup
+4. If response received (127.0.0.x), IP is listed
+5. If NXDOMAIN, IP is clean
+
+Supported providers (15 total):
+- Spamhaus ZEN (comprehensive)
+- UCEProtect L1/L2/L3 (escalating severity)
+- SpamRATS (dynamic IPs, no PTR, spam)
+- Barracuda, SpamCop, SORBS, PSBL, CBL
+- Blocklist.de, DroneBL, Fabel Spamsources
+"""
 
 import asyncio
 from datetime import datetime, timezone
@@ -131,6 +151,12 @@ DNSBL_ZONES: Dict[str, Dict[str, Any]] = {
             "127.0.0.18": "DNS/MX",
             "127.0.0.19": "Abused VPN",
         },
+    },
+    # Fabel.dk spam sources
+    "spamsources.fabel.dk": {
+        "name": "Fabel Spamsources",
+        "description": "Fabel.dk Spam Sources List",
+        "return_codes": {"127.0.0.2": "Listed"},
     },
 }
 

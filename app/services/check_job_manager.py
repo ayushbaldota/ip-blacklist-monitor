@@ -1,4 +1,19 @@
-"""Background job manager for check-all operations."""
+"""
+Background Job Manager for Check-All Operations.
+
+This module provides background job processing for bulk IP blacklist checks.
+It handles:
+- Starting/stopping check-all jobs
+- Progress tracking and status reporting
+- Concurrent IP checking with rate limiting
+- Job lifecycle management (pending -> running -> completed/cancelled/failed)
+
+Usage:
+    job_manager = CheckJobManager(checker_service)
+    result = await job_manager.start_job()  # Returns job_id
+    status = await job_manager.get_job_status(job_id)  # Poll for progress
+    await job_manager.cancel_job(job_id)  # Cancel if needed
+"""
 
 import asyncio
 import uuid
@@ -242,6 +257,7 @@ class CheckJobManager:
                                 blacklist_sources=check_result["blacklist_sources"],
                                 check_duration_ms=check_result["check_duration_ms"],
                                 triggered_by="check_all",
+                                error_sources=check_result.get("error_sources", []),
                             )
                             await db.commit()
 

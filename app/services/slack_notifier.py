@@ -249,7 +249,7 @@ class SlackNotifier:
         return await self._send_message(payload)
 
     async def _send_message(self, payload: Dict[str, Any]) -> bool:
-        """Send message to Slack webhook."""
+        """Send message to Slack webhook with robust error handling."""
         if not self.webhook_url:
             logger.warning("Slack webhook URL not configured")
             return False
@@ -269,8 +269,17 @@ class SlackNotifier:
                 )
                 return False
 
+        except httpx.TimeoutException:
+            logger.warning("Slack notification timeout - webhook may be slow")
+            return False
+        except httpx.ConnectError:
+            logger.error("Slack notification failed - connection error")
+            return False
+        except httpx.HTTPStatusError as e:
+            logger.error("Slack HTTP error", status_code=e.response.status_code)
+            return False
         except Exception as e:
-            logger.error("Failed to send Slack notification", error=str(e))
+            logger.error("Unexpected error sending Slack notification", error=str(e))
             return False
 
     async def health_check(self) -> bool:

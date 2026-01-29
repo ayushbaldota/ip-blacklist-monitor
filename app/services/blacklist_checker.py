@@ -1,4 +1,16 @@
-"""Blacklist checker service that orchestrates checks across all providers."""
+"""
+Blacklist Checker Service.
+
+This module orchestrates blacklist checks across multiple DNS-based blacklist (DNSBL) providers.
+It handles:
+- Concurrent checking against 15 DNSBL providers
+- Scheduled automatic checks for all monitored IPs
+- Slack notifications for blacklist events
+- Error tracking and reporting
+
+The service uses asyncio for high-performance concurrent DNS queries,
+allowing it to check thousands of IPs efficiently.
+"""
 
 import asyncio
 from datetime import datetime, timezone
@@ -59,18 +71,25 @@ class BlacklistCheckerService:
 
         # Process results
         blacklist_sources = []
-        errors = []
+        error_sources = []
+        error_messages = []
 
         for result in results:
             if isinstance(result, Exception):
-                errors.append(str(result))
+                error_messages.append(str(result))
                 continue
 
             if isinstance(result, BlacklistResult):
                 if result.is_listed:
                     blacklist_sources.append(result.to_dict())
                 if result.error:
-                    errors.append(f"{result.provider_name}: {result.error}")
+                    error_messages.append(f"{result.provider_name}: {result.error}")
+                    # Track providers with errors (timeouts, etc.) separately
+                    error_sources.append({
+                        "provider": result.provider_name,
+                        "error": result.error,
+                        "details": result.details,
+                    })
 
         check_duration = int(
             (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
@@ -80,9 +99,10 @@ class BlacklistCheckerService:
             "ip_address": ip_address,
             "is_blacklisted": len(blacklist_sources) > 0,
             "blacklist_sources": blacklist_sources,
+            "error_sources": error_sources if error_sources else [],
             "providers_checked": len(self.providers),
-            "providers_with_errors": len(errors),
-            "errors": errors if errors else None,
+            "providers_with_errors": len(error_sources),
+            "errors": error_messages if error_messages else None,
             "check_duration_ms": check_duration,
             "checked_at": datetime.now(timezone.utc),
         }
@@ -127,6 +147,7 @@ class BlacklistCheckerService:
                     status=new_status,
                     blacklist_sources=check_result["blacklist_sources"],
                     check_duration_ms=check_result["check_duration_ms"],
+                    error_sources=check_result.get("error_sources", []),
                 )
 
                 # Track status changes and handle notifications

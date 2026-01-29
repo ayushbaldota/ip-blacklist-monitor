@@ -1,7 +1,7 @@
 """SQLAlchemy database models."""
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     Boolean,
@@ -34,14 +34,19 @@ class IP(Base):
     ip_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    tags: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    isp: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    org: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    country_code: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    tags: Mapped[List[str]] = mapped_column(JSONB, default=list, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", index=True
     )
     last_checked: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
-    blacklist_sources: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    blacklist_sources: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    error_sources: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Notification muting - prevents repeated alerts for same blacklist event
     notifications_muted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -64,6 +69,8 @@ class IP(Base):
         CheckConstraint("status IN ('pending', 'clean', 'blacklisted')", name="check_status"),
         Index("idx_ips_is_active", "is_active", postgresql_where=(is_active == True)),
         Index("idx_ips_status", "status"),
+        Index("idx_ips_created_at", "created_at"),
+        Index("idx_ips_updated_at", "updated_at"),
     )
 
     def __repr__(self) -> str:
@@ -80,7 +87,7 @@ class IPHistory(Base):
         String(45), ForeignKey("ips.ip_address", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False)
-    blacklist_sources: Mapped[dict] = mapped_column(JSONB, default=list, nullable=False)
+    blacklist_sources: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
     check_duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     checked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
@@ -111,7 +118,7 @@ class APIKey(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    permissions: Mapped[dict] = mapped_column(JSONB, default=["read"], nullable=False)
+    permissions: Mapped[List[str]] = mapped_column(JSONB, default=list, nullable=False)
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(
@@ -144,7 +151,7 @@ class ActivityLog(Base):
     activity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     old_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     new_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    details: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     triggered_by: Mapped[str] = mapped_column(String(100), nullable=False, default="api")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True

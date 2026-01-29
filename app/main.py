@@ -1,5 +1,20 @@
-"""FastAPI application setup and configuration."""
+"""
+FastAPI Application Entry Point.
 
+This module initializes and configures the FastAPI application for the IP Blacklist Monitor.
+It handles:
+- Application lifecycle (startup/shutdown)
+- Service initialization (DNSBL providers, Slack notifier, scheduler)
+- Middleware configuration (CORS, request logging, rate limiting)
+- Exception handlers for API errors
+- API router registration
+
+The application monitors IP addresses against DNS-based blacklists (DNSBLs)
+and provides real-time notifications via Slack when IPs are blacklisted.
+"""
+
+import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
@@ -131,6 +146,32 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Add request logging middleware with correlation IDs
+    @app.middleware("http")
+    async def request_logging_middleware(request: Request, call_next):
+        """Add request ID and log request/response details."""
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        request.state.request_id = request_id
+
+        start_time = time.time()
+        response = await call_next(request)
+        duration_ms = round((time.time() - start_time) * 1000)
+
+        # Log request details (skip health checks to reduce noise)
+        if not request.url.path.endswith("/health"):
+            logger.info(
+                "request_completed",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            )
+
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Response-Time"] = f"{duration_ms}ms"
+        return response
 
     # Register exception handlers
     @app.exception_handler(AppException)

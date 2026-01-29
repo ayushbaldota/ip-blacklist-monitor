@@ -9,12 +9,14 @@ from app.config import get_settings
 
 settings = get_settings()
 
-# Create async engine
+# Create async engine with production-ready pool settings
 engine = create_async_engine(
     settings.database_url,
     pool_size=settings.database_pool_size,
     max_overflow=settings.database_max_overflow,
     pool_timeout=settings.database_pool_timeout,
+    pool_recycle=3600,  # Recycle connections after 1 hour to prevent stale connections
+    pool_pre_ping=True,  # Test connections before using to handle disconnects
     echo=settings.debug,
 )
 

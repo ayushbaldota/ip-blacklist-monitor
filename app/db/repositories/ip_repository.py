@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import IPAlreadyExistsError, IPNotFoundError
 from app.db.models import IP, IPHistory, ActivityLog
+from app.services.isp_lookup import get_isp_service
 from app.utils.logging import get_logger
 from app.utils.validators import validate_ip_address
 
@@ -56,6 +57,14 @@ class IPRepository:
         if existing:
             raise IPAlreadyExistsError(normalized_ip)
 
+        # Lookup ISP information
+        isp_info = {}
+        try:
+            isp_service = get_isp_service()
+            isp_info = await isp_service.lookup(normalized_ip)
+        except Exception as e:
+            logger.warning("Failed to lookup ISP info", ip=normalized_ip, error=str(e))
+
         ip = IP(
             ip_address=normalized_ip,
             ip_version=ip_version,
@@ -65,6 +74,10 @@ class IPRepository:
             status="pending",
             blacklist_sources=[],
             is_active=True,
+            isp=isp_info.get("isp"),
+            org=isp_info.get("org"),
+            country=isp_info.get("country"),
+            country_code=isp_info.get("country_code"),
         )
 
         self.db.add(ip)
@@ -215,13 +228,14 @@ class IPRepository:
         """
         now = datetime.now(timezone.utc)
 
-        # Update all active IPs to pending
+        # Update all active IPs to pending - clear all old data
         result = await self.db.execute(
             update(IP)
             .where(IP.is_active == True)
             .values(
                 status="pending",
                 blacklist_sources=[],
+                error_sources=[],
                 updated_at=now,
             )
         )
@@ -239,6 +253,7 @@ class IPRepository:
         blacklist_sources: List[Dict[str, Any]],
         check_duration_ms: Optional[int] = None,
         triggered_by: str = "scheduler",
+        error_sources: Optional[List[Dict[str, Any]]] = None,
     ) -> IP:
         """Update IP status after a blacklist check."""
         ip = await self.get_by_address(ip_address)
@@ -255,6 +270,7 @@ class IPRepository:
             .values(
                 status=status,
                 blacklist_sources=blacklist_sources,
+                error_sources=error_sources or [],
                 last_checked=now,
                 updated_at=now,
             )

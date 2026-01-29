@@ -136,9 +136,14 @@ class IPResponse(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    isp: Optional[str] = None
+    org: Optional[str] = None
+    country: Optional[str] = None
+    country_code: Optional[str] = None
     status: str
     last_checked: Optional[datetime] = None
     blacklist_sources: List[Any] = Field(default_factory=list)
+    error_sources: List[Any] = Field(default_factory=list)
     blacklists: List[Any] = Field(default_factory=list)
     blacklist_count: int = 0
     listings: int = 0
