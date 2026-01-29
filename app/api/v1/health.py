@@ -17,6 +17,7 @@ from app.core.rate_limiter import limiter
 from app.core.security import require_read_permission
 from app.db.database import get_db
 from app.db.models import APIKey
+from app.db.repositories.activity_repository import ActivityRepository, StatsRepository
 from app.db.repositories.history_repository import HistoryRepository
 from app.db.repositories.ip_repository import IPRepository
 from app.services.slack_notifier import SlackNotifier
@@ -98,6 +99,7 @@ async def get_stats(
     """Get system statistics."""
     ip_repo = IPRepository(db)
     history_repo = HistoryRepository(db)
+    stats_repo = StatsRepository(db)
 
     # Get IP stats
     ip_stats = await ip_repo.get_stats()
@@ -115,6 +117,12 @@ async def get_stats(
             "next_run": status["next_run"],
         }
 
+    # Get history data for charts (last 30 days)
+    history_data = await stats_repo.get_history(days=30)
+
+    # Get provider stats with counts
+    provider_stats = await stats_repo.get_provider_stats()
+
     # Return flat structure for frontend compatibility
     return {
         "data": {
@@ -129,7 +137,8 @@ async def get_stats(
             "active_providers": len(settings.dnsbl_zones_list),
             "checks_today": checks_today,
             "status_changes_today": changes_today,
-            "providers": settings.dnsbl_zones_list,
+            "providers": provider_stats,
+            "history": history_data,
         }
     }
 
@@ -141,10 +150,10 @@ async def get_activity(
     api_key: APIKey = Depends(require_read_permission),
 ):
     """Get recent activity (status changes)."""
-    history_repo = HistoryRepository(db)
+    activity_repo = ActivityRepository(db)
 
-    # Get recent history entries with status changes
-    recent = await history_repo.get_recent_activity(limit=limit)
+    # Get recent activity entries with proper types
+    recent = await activity_repo.get_recent_activity(limit=limit)
 
     return {
         "data": {
@@ -154,7 +163,7 @@ async def get_activity(
 
 
 @router.post("/webhook/test")
-@limiter.limit("5/minute")
+@limiter.limit("1200/minute")
 async def test_webhook(
     request: Request,
     api_key: APIKey = Depends(require_read_permission),

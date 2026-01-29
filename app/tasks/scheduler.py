@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.db.database import AsyncSessionLocal
+from app.db.repositories.activity_repository import StatsRepository
 from app.services.blacklist_checker import BlacklistCheckerService
 from app.services.slack_notifier import SlackNotifier
 from app.utils.logging import get_logger
@@ -125,6 +126,13 @@ class SchedulerService:
                             self.checker.run_scheduled_check(db),
                             timeout=self.max_execution_time,
                         )
+
+                        # Record daily stats after successful check
+                        stats_repo = StatsRepository(db)
+                        await stats_repo.record_daily_stats()
+                        await db.commit()
+                        logger.info("Daily stats recorded")
+
                     except asyncio.TimeoutError:
                         logger.error(
                             "Check exceeded max execution time",
