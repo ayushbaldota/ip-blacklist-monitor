@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import IPAlreadyExistsError, IPNotFoundError
 from app.db.models import IP, IPHistory, ActivityLog
+from app.services.hostname_lookup import get_hostname_service
 from app.services.isp_lookup import get_isp_service
 from app.utils.logging import get_logger
 from app.utils.validators import validate_ip_address
@@ -65,6 +66,14 @@ class IPRepository:
         except Exception as e:
             logger.warning("Failed to lookup ISP info", ip=normalized_ip, error=str(e))
 
+        # Lookup hostname (reverse DNS)
+        hostname = None
+        try:
+            hostname_service = get_hostname_service()
+            hostname = await hostname_service.lookup(normalized_ip)
+        except Exception as e:
+            logger.warning("Failed to lookup hostname", ip=normalized_ip, error=str(e))
+
         ip = IP(
             ip_address=normalized_ip,
             ip_version=ip_version,
@@ -78,6 +87,7 @@ class IPRepository:
             org=isp_info.get("org"),
             country=isp_info.get("country"),
             country_code=isp_info.get("country_code"),
+            hostname=hostname,
         )
 
         self.db.add(ip)

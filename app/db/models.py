@@ -38,6 +38,7 @@ class IP(Base):
     org: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     country: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     country_code: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    hostname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     tags: Mapped[List[str]] = mapped_column(JSONB, default=list, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", index=True

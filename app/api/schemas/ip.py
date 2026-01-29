@@ -140,6 +140,7 @@ class IPResponse(BaseModel):
     org: Optional[str] = None
     country: Optional[str] = None
     country_code: Optional[str] = None
+    hostname: Optional[str] = None
     status: str
     last_checked: Optional[datetime] = None
     blacklist_sources: List[Any] = Field(default_factory=list)
